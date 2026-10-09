@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>손가락 프레임 웹툰 필터</title>
+  <link rel="icon" href="data:,">
+  <link rel="stylesheet" href="css/style.css">
+</head>
+<body>
+  <main id="stage">
+    <video id="video" playsinline muted></video>
+    <canvas id="canvas"></canvas>
+    <canvas id="overlay"></canvas>
+  </main>
+
+  <div id="hint">양손 <b>엄지·검지</b>로 <b>ㄱ ㄴ</b> 모양 프레임을 만들어 보세요</div>
+  <div id="status" hidden></div>
+
+  <nav id="toolbar">
+    <div class="group">
+      <button data-style="webtoon" title="단축키 1">웹툰</button>
+      <button data-style="sketch" title="단축키 2">스케치</button>
+      <button data-style="pixel" title="단축키 3">픽셀</button>
+      <button data-style="ai" title="단축키 4 · AnimeGANv3 .onnx 모델 필요">AI 애니</button>
+    </div>
+    <div class="group">
+      <button id="btn-mirror" title="좌우 반전 (M)">좌우반전</button>
+      <button id="btn-border" title="프레임 테두리 (B)">테두리</button>
+      <select id="camera" title="카메라 선택" hidden></select>
+      <button id="btn-shot" title="캡처 저장 (S)">캡처</button>
+      <button id="btn-full" title="전체화면 (F)">전체화면</button>
+    </div>
+  </nav>
+  <input id="ai-file" type="file" accept=".onnx" hidden>
+
+  <script type="module" src="js/main.js"></script>
+</body>
+</html>
