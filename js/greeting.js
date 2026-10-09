@@ -8,6 +8,66 @@ export const GREETINGS = [
   '만나뵙게 되어 반갑습니다',     // 다섯 손가락
 ];
 
+// 랜섬 노트(신문·잡지 글자 오려 붙이기) 스타일: 글자마다 글꼴·종이·기울기를 다르게
+const FONTS = [
+  'Black Han Sans', 'Do Hyeon', 'Nanum Myeongjo', 'Nanum Pen Script', 'Gugi',
+  'Yeon Sung', 'Jua', 'Song Myung', 'East Sea Dokdo',
+];
+// 손글씨 글꼴은 글자가 작게 그려져서 크기를 보정
+const FONT_SCALE = { 'Nanum Pen Script': 1.4, 'East Sea Dokdo': 1.4 };
+// [배경, 글자색, 무늬]  무늬: '' 없음, 'news' 신문 줄무늬, 'dots' 망점
+const PAPERS = [
+  ['#f4efe1', '#151515', 'news'], ['#151515', '#f4efe1', ''], ['#d7263d', '#ffffff', ''],
+  ['#ffd23f', '#151515', 'dots'], ['#ffffff', '#d7263d', ''], ['#2f6fdf', '#ffffff', ''],
+  ['#e6d2a8', '#3b2a1a', 'news'], ['#ff8fab', '#151515', 'dots'], ['#e9e9e4', '#1d3557', 'news'],
+  ['#2a9d8f', '#fdf6e3', ''], ['#ffffff', '#151515', ''],
+];
+
+// 같은 문장은 항상 같은 배치가 나오도록, 문장으로 시드를 정하는 난수
+function seeded(text) {
+  let h = 2166136261;
+  for (const ch of text) h = Math.imul(h ^ ch.codePointAt(0), 16777619);
+  return () => {
+    h = Math.imul(h ^ (h >>> 15), 2246822507);
+    h = Math.imul(h ^ (h >>> 13), 3266489909);
+    return ((h ^= h >>> 16) >>> 0) / 4294967296;
+  };
+}
+
+// 가위로 오린 듯 삐뚤빼뚤한 테두리 (clip-path 다각형)
+function jagged(rnd) {
+  const j = () => (rnd() * 7).toFixed(1);
+  return `polygon(${j()}% ${j()}%, 50% ${j() / 2}%, ${100 - j()}% ${j()}%, ${100 - j() / 2}% 50%, `
+    + `${100 - j()}% ${100 - j()}%, 50% ${100 - j() / 2}%, ${j()}% ${100 - j()}%, ${j() / 2}% 50%)`;
+}
+
+function ransom(text) {
+  const rnd = seeded(text);
+  const pick = (arr) => arr[Math.floor(rnd() * arr.length)];
+  let i = 0;
+  let lastFont = '';
+  let lastPaper = null;
+  return text.split(' ').map((word) => {
+    const letters = [...word].map((ch) => {
+      // 바로 옆 글자와는 글꼴·종이가 겹치지 않게
+      let font, paper;
+      do font = pick(FONTS); while (font === lastFont);
+      do paper = pick(PAPERS); while (paper === lastPaper);
+      lastFont = font;
+      lastPaper = paper;
+      const size = ((0.82 + rnd() * 0.42) * (FONT_SCALE[font] || 1)).toFixed(2);
+      const rot = ((rnd() - 0.5) * 16).toFixed(1);
+      const y = ((rnd() - 0.5) * 14).toFixed(1);
+      const pad = `${(0.06 + rnd() * 0.1).toFixed(2)}em ${(0.08 + rnd() * 0.12).toFixed(2)}em`;
+      const style = `--r:${rot}deg;--y:${y}%;--d:${i++ * 70}ms;font-size:${size}em`;
+      const paperStyle = `font-family:'${font}';background-color:${paper[0]};color:${paper[1]};`
+        + `padding:${pad};clip-path:${jagged(rnd)}`;
+      return `<span class="cut" style="${style}"><span class="paper ${paper[2]}" style="${paperStyle}">${ch}</span></span>`;
+    }).join('');
+    return `<span class="word">${letters}</span>`;
+  }).join('<span class="gap"></span>');
+}
+
 const STABLE_MS = 200;   // 같은 손가락 모양이 이만큼 유지돼야 자막을 바꾼다 (깜빡임 방지)
 const HIDE_MS = 900;     // 손이 안 보이거나 주먹을 쥔 뒤 이만큼 지나면 자막을 숨긴다
 
@@ -52,6 +112,8 @@ export class GreetingCaption {
     this.textEl = el.querySelector('.text');
     this.dotsEl = el.querySelector('.dots');
     this.dotsEl.innerHTML = GREETINGS.map(() => '<i></i>').join('');
+    // 글꼴을 미리 불러와서 처음 나올 때 글꼴이 바뀌며 깜빡이지 않게
+    FONTS.forEach((f) => document.fonts.load(`40px '${f}'`, '안녕').catch(() => {}));
     this.shown = null;      // 지금 보이는 자막 번호
     this.candidate = null;  // 바뀌려고 대기 중인 번호
     this.candidateAt = 0;
@@ -82,13 +144,9 @@ export class GreetingCaption {
 
   show(n) {
     this.shown = n;
-    this.textEl.textContent = GREETINGS[n - 1];
+    this.textEl.innerHTML = ransom(GREETINGS[n - 1]);
     [...this.dotsEl.children].forEach((d, i) => d.classList.toggle('on', i < n));
     this.el.classList.add('show');
-    // 바뀔 때마다 톡 튀어나오는 애니메이션
-    this.textEl.classList.remove('pop');
-    void this.textEl.offsetWidth;
-    this.textEl.classList.add('pop');
   }
 
   hide() {

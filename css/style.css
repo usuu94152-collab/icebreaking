@@ -52,6 +52,17 @@ html, body {
 #hint.show { opacity: 1; }
 #hint b { color: var(--accent); }
 
+/* 랜섬 노트 글꼴 (SIL OFL, fonts/OFL.txt) */
+@font-face { font-family: 'Black Han Sans'; src: url(../fonts/BlackHanSans-Regular.woff2) format('woff2'); font-display: block; }
+@font-face { font-family: 'Do Hyeon'; src: url(../fonts/DoHyeon-Regular.woff2) format('woff2'); font-display: block; }
+@font-face { font-family: 'Nanum Myeongjo'; src: url(../fonts/NanumMyeongjo-ExtraBold.woff2) format('woff2'); font-display: block; }
+@font-face { font-family: 'Nanum Pen Script'; src: url(../fonts/NanumPenScript-Regular.woff2) format('woff2'); font-display: block; }
+@font-face { font-family: 'Gugi'; src: url(../fonts/Gugi-Regular.woff2) format('woff2'); font-display: block; }
+@font-face { font-family: 'Yeon Sung'; src: url(../fonts/YeonSung-Regular.woff2) format('woff2'); font-display: block; }
+@font-face { font-family: 'Jua'; src: url(../fonts/Jua-Regular.woff2) format('woff2'); font-display: block; }
+@font-face { font-family: 'Song Myung'; src: url(../fonts/SongMyung-Regular.woff2) format('woff2'); font-display: block; }
+@font-face { font-family: 'East Sea Dokdo'; src: url(../fonts/EastSeaDokdo-Regular.woff2) format('woff2'); font-display: block; }
+
 /* 인사 자막 */
 #caption {
   position: fixed;
@@ -68,20 +79,40 @@ html, body {
 }
 #caption.show { opacity: 1; }
 #caption .text {
-  padding: 0.35em 0.9em;
-  border-radius: 0.5em;
-  background: rgba(10, 10, 14, 0.62);
-  font-size: clamp(32px, 6vw, 96px);
-  font-weight: 800;
-  letter-spacing: -0.02em;
-  text-align: center;
-  word-break: keep-all;
-  text-shadow: 0 3px 12px rgba(0, 0, 0, 0.5);
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  align-items: center;
+  row-gap: 0.15em;
+  font-size: clamp(40px, 6.5vw, 112px);
+  line-height: 1;
 }
-#caption .text.pop { animation: pop 0.35s cubic-bezier(0.2, 1.4, 0.4, 1); }
-@keyframes pop {
-  from { transform: scale(0.7); opacity: 0.3; }
-  to { transform: scale(1); opacity: 1; }
+#caption .word { display: inline-flex; align-items: center; white-space: nowrap; }
+#caption .gap { width: 0.35em; }
+/* 오린 글자 한 조각: 바깥은 기울기·그림자, 안쪽은 종이 */
+#caption .cut {
+  display: inline-block;
+  margin: 0 0.02em;
+  transform: translateY(var(--y)) rotate(var(--r));
+  filter: drop-shadow(2px 3px 2px rgba(0, 0, 0, 0.45));
+}
+#caption .paper {
+  display: inline-block;
+  min-width: 0.9em;
+  text-align: center;
+  animation: stick 0.32s cubic-bezier(0.2, 1.5, 0.4, 1) var(--d) both;
+}
+#caption .paper.news {
+  background-image: repeating-linear-gradient(0deg, rgba(0, 0, 0, 0.07) 0 1px, transparent 1px 5px);
+}
+#caption .paper.dots {
+  background-image: radial-gradient(rgba(0, 0, 0, 0.13) 22%, transparent 24%);
+  background-size: 7px 7px;
+}
+/* 글자를 한 장씩 탁탁 붙이는 애니메이션 */
+@keyframes stick {
+  from { transform: scale(1.8) rotate(-12deg); opacity: 0; }
+  to { transform: scale(1) rotate(0); opacity: 1; }
 }
 #caption .dots { display: flex; gap: 10px; }
 #caption .dots i {
