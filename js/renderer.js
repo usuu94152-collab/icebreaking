@@ -7,8 +7,16 @@ export const STYLES = {
   webtoon: 0,
   sketch: 1,
   pixel: 2,
-  saiyan: 3,
+  pop: 3,
+  neon: 4,
+  thermal: 5,
 };
+
+// 매끈하게 펴 둔 영상(bilateral)이 필요한 스타일
+const NEEDS_SMOOTH = new Set([STYLES.webtoon, STYLES.pop, STYLES.neon, STYLES.thermal]);
+
+// 다각형 꼭짓점 최대 개수 (사각형 4개, 삼각형 두 개는 6개)
+export const MAX_POINTS = 8;
 
 const VS_PASS = `#version 300 es
 in vec2 aPos;
@@ -52,7 +60,7 @@ void main() {
   outColor = vec4(sum / wsum, 1.0);
 }`;
 
-// 스타일 패스: 웹툰(색 보정 + 외곽선) / 연필 스케치 / 8비트 픽셀
+// 스타일 패스: 웹툰 / 연필 스케치 / 8비트 픽셀 / 만화책 팝아트 / 네온 사이버 / 열화상
 const FS_STYLE = `#version 300 es
 precision highp float;
 in vec2 vUv;
@@ -61,15 +69,7 @@ uniform sampler2D uSrc;    // 원본 영상
 uniform sampler2D uFlat;   // bilateral 결과
 uniform vec2 uTexel;
 uniform int uStyle;
-// 초사이어인 전용
-uniform sampler2D uOverlay;  // 뾰족 머리·번개 (2D 캔버스)
-uniform sampler2D uHair;     // 머리카락 마스크
-uniform vec3 uIris[2];       // 눈동자 중심(x, y) + 반지름(px)
-uniform vec4 uHead;          // 머리 중심(x, y), 반지름(px), 얼굴 인식 여부
-uniform vec2 uUp;            // 머리 위쪽 방향
-uniform vec2 uVideoSize;
-uniform float uTime;
-uniform float uBurst;        // 변신 순간 번쩍임 (1 → 0)
+uniform float uTime;       // 초 (애니메이션용)
 
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
@@ -133,67 +133,92 @@ vec3 pixel() {
   return c * (1.0 - 0.12 * min(grid, 1.0));
 }
 
-float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
-float noise(vec2 p) {
-  vec2 i = floor(p), f = fract(p);
-  vec2 u = f * f * (3.0 - 2.0 * f);
-  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
-}
-float fbm(vec2 p) {
-  float v = 0.0, a = 0.5;
-  for (int i = 0; i < 4; i++) { v += a * noise(p); p *= 2.0; a *= 0.5; }
-  return v;
+// 매끈한 영상의 밝기 기울기 (윤곽선 세기)
+vec2 gradient(vec2 uv, float r) {
+  vec2 t = uTexel * r;
+  float l = luma(texture(uFlat, uv - vec2(t.x, 0.0)).rgb);
+  float rr = luma(texture(uFlat, uv + vec2(t.x, 0.0)).rgb);
+  float u = luma(texture(uFlat, uv - vec2(0.0, t.y)).rgb);
+  float d = luma(texture(uFlat, uv + vec2(0.0, t.y)).rgb);
+  return vec2(rr - l, d - u);
 }
 
-vec3 saiyan() {
-  vec3 c = texture(uSrc, vUv).rgb;
+// 만화책 팝아트: 진한 색 + 망점(하프톤) + 굵은 먹선
+vec3 popart() {
+  vec3 c = texture(uFlat, vUv).rgb;
   float l = luma(c);
+  // 색은 유지하고 밝기만 3단계로 뭉쳐서 만화 채색처럼
+  vec3 col = saturate3(c, 1.7);
+  float lq = (floor(l * 3.0) + 0.5) / 3.0 + 0.08;
+  col = clamp(col * lq / max(l, 0.05), 0.0, 1.0);
+  vec3 paper = vec3(1.0, 0.97, 0.9);
+  vec3 light = mix(paper, col, 0.55);
+  // 망점: 45도 기울인 격자. 밝은 곳은 점 없음, 어두울수록 점이 커진다
+  vec2 px = vUv / uTexel;
+  const float A = 0.7854;
+  vec2 g = mat2(cos(A), -sin(A), sin(A), cos(A)) * px / 6.0;
+  float r = 0.75 * smoothstep(0.8, 0.2, l);
+  float dotm = 1.0 - smoothstep(r - 0.07, r + 0.07, length(fract(g) - 0.5));
+  c = mix(light, col * 0.8, dotm);
+  c = mix(c, col * 0.35, smoothstep(0.2, 0.08, l));         // 아주 어두운 곳은 꽉 채움
+  // 굵은 먹선
+  float b1 = blurLuma(uFlat, vUv, uTexel, 0.8);
+  float b2 = blurLuma(uFlat, vUv, uTexel, 2.0);
+  float ink = 1.0 - smoothstep(-0.035, -0.012, b1 - 0.99 * b2);
+  return mix(c, vec3(0.04, 0.03, 0.05), ink);
+}
 
-  // 1) 진짜 머리카락을 금색으로 (어두운 곳은 진한 금색, 밝은 곳은 연한 금색)
-  // 마스크 가장자리를 부드럽게 (주변 9칸 평균)
-  float hm = 0.0;
-  vec2 hs = 3.0 / uVideoSize;
-  for (int j = -1; j <= 1; j++)
-    for (int i = -1; i <= 1; i++)
-      hm += texture(uHair, vUv + vec2(float(i), float(j)) * hs).r;
-  float hair = smoothstep(0.4, 0.8, hm / 9.0);
-  vec3 gold = mix(vec3(0.78, 0.47, 0.02), vec3(1.0, 0.95, 0.55), smoothstep(0.02, 0.4, l));
-  c = mix(c, gold, hair * 0.95);
+vec3 hue(float h) {
+  return clamp(abs(fract(h + vec3(0.0, 2.0 / 3.0, 1.0 / 3.0)) * 6.0 - 3.0) - 1.0, 0.0, 1.0);
+}
 
-  // 2) 청록색 눈동자 (가운데 동공은 어둡게 유지)
-  for (int i = 0; i < 2; i++) {
-    float r = uIris[i].z;
-    if (r <= 0.0) continue;
-    float d = length((vUv - uIris[i].xy) * uVideoSize);
-    float iris = 1.0 - smoothstep(r * 0.8, r * 1.05, d);
-    vec3 teal = vec3(0.05, 0.80, 0.72) * (0.45 + l * 1.4);
-    teal = mix(c * 0.6, teal, smoothstep(r * 0.25, r * 0.45, d));
-    c = mix(c, teal, iris * 0.9);
-  }
-
-  // 3) 뾰족 머리·번개
-  vec4 o = texture(uOverlay, vUv);
-  c = mix(c, o.rgb, o.a);
-
-  // 4) 머리 주변에서 타오르는 황금 오라
-  if (uHead.w > 0.5) {
-    vec2 p = (vUv - uHead.xy) * uVideoSize / uHead.z;
-    vec2 right = vec2(-uUp.y, uUp.x);
-    vec2 q = vec2(dot(p, right), dot(p, uUp));     // q.y > 0 이 머리 위쪽
-    float r = length(q * vec2(1.0, 0.8));
-    float flame = fbm(vec2(q.x * 3.0, q.y * 1.4 - uTime * 3.5));
-    float ring = smoothstep(0.75, 1.05, r) * (1.0 - smoothstep(1.25, 1.7 + flame * 0.9, r));
-    ring *= smoothstep(-1.6, -0.4, q.y);            // 몸 아래쪽으로 갈수록 약하게
-    float tongues = smoothstep(0.42, 0.72, flame);  // 불꽃 혀 모양
-    float a = ring * (0.12 + 0.8 * tongues) * (1.0 + 1.5 * uBurst);
-    a *= 1.0 - o.a * 0.6;                           // 머리카락 위에서는 살짝만
-    c += vec3(1.0, 0.80, 0.22) * a;
-  }
-
-  // 전체적으로 황금빛 + 변신 순간 번쩍
-  c *= vec3(1.04, 1.01, 0.94);
-  c = mix(c, vec3(1.0, 0.97, 0.8), uBurst * 0.75);
+// 네온 사이버: 어두운 화면에 윤곽선이 네온색으로 빛나고 스캔라인이 지나간다
+vec3 neon() {
+  float e = length(gradient(vUv, 1.5));
+  float glow = length(gradient(vUv, 5.0));
+  float line = smoothstep(0.04, 0.16, e);
+  float halo = smoothstep(0.02, 0.2, glow);
+  // 위치와 시간에 따라 청록 → 보라 → 분홍으로 흐르는 색
+  vec3 col = hue(0.5 + 0.35 * fract(vUv.y * 0.8 + vUv.x * 0.3 - uTime * 0.15));
+  float l = luma(texture(uFlat, vUv).rgb);
+  vec3 c = vec3(0.02, 0.01, 0.06) + vec3(0.05, 0.08, 0.2) * l;
+  c += col * halo * 0.55 + mix(col, vec3(1.0), 0.35) * line * 1.2;
+  // 가로 스캔라인 + 위에서 아래로 훑는 빛줄기 + 옅은 격자
+  vec2 px = vUv / uTexel;
+  c *= 0.82 + 0.18 * sin(px.y * 1.6);
+  float bar = exp(-pow((fract(vUv.y * 0.7 - uTime * 0.35) - 0.5) * 24.0, 2.0));
+  c += vec3(0.2, 0.9, 1.0) * bar * 0.25;
+  vec2 grid = abs(fract(px / 40.0) - 0.5);
+  c += vec3(0.1, 0.25, 0.5) * 0.15 * (1.0 - smoothstep(0.0, 0.03, min(grid.x, grid.y)));
   return clamp(c, 0.0, 1.0);
+}
+
+// 열화상: 사람 피부·얼굴은 뜨겁게(노랑·흰색), 배경은 차갑게(파랑·보라)
+vec3 ironbow(float t) {
+  vec3 c0 = vec3(0.0, 0.0, 0.05), c1 = vec3(0.15, 0.0, 0.45), c2 = vec3(0.6, 0.0, 0.55);
+  vec3 c3 = vec3(0.95, 0.25, 0.05), c4 = vec3(1.0, 0.75, 0.0), c5 = vec3(1.0, 1.0, 0.85);
+  t = clamp(t, 0.0, 1.0) * 5.0;
+  if (t < 1.0) return mix(c0, c1, t);
+  if (t < 2.0) return mix(c1, c2, t - 1.0);
+  if (t < 3.0) return mix(c2, c3, t - 2.0);
+  if (t < 4.0) return mix(c3, c4, t - 3.0);
+  return mix(c4, c5, t - 4.0);
+}
+
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+
+vec3 thermal() {
+  vec3 c = texture(uFlat, vUv).rgb;
+  float l = luma(c);
+  // 피부색(빨강이 파랑보다 확실히 큰 색)일수록 온도를 높게
+  float skin = smoothstep(0.03, 0.2, c.r - c.b) * smoothstep(0.15, 0.4, c.r);
+  float heat = l * 0.35 + skin * 0.65;
+  // 살짝 번진 느낌 + 센서 노이즈
+  heat += (hash(floor(vUv / uTexel / 2.0) + floor(uTime * 12.0)) - 0.5) * 0.03;
+  vec3 o = ironbow(heat);
+  vec2 px = vUv / uTexel;
+  o *= 0.92 + 0.08 * sin(px.y * 2.0);
+  return o;
 }
 
 void main() {
@@ -201,23 +226,23 @@ void main() {
   if (uStyle == 0) c = webtoon();
   else if (uStyle == 1) c = sketch();
   else if (uStyle == 2) c = pixel();
-  else c = saiyan();
+  else if (uStyle == 3) c = popart();
+  else if (uStyle == 4) c = neon();
+  else c = thermal();
   outColor = vec4(c, 1.0);
 }`;
 
-// 최종 합성: 손가락 사각형 안쪽은 스타일 영상, 바깥은 원본
+// 최종 합성: 손가락 프레임(사각형 또는 삼각형 두 개) 안쪽은 스타일 영상, 바깥은 원본
 const FS_COMPOSITE = `#version 300 es
 precision highp float;
 in vec2 vUv;
 out vec4 outColor;
 uniform sampler2D uVideo;
 uniform sampler2D uStyled;
-uniform sampler2D uAi;
-uniform vec2 uQuad[4];
+uniform vec2 uPoly[8];    // 프레임 꼭짓점 (0~1)
+uniform int uCount;       // 꼭짓점 개수
 uniform float uActive;
 uniform float uMirror;
-uniform float uUseAi;
-uniform vec4 uAiRect;     // AI 결과가 덮는 영역 (x, y, w, h)
 uniform vec2 uVideoSize;
 uniform float uBorder;    // 테두리 두께(px), 0이면 없음
 
@@ -227,13 +252,14 @@ float segDist(vec2 p, vec2 a, vec2 b) {
   return length(pa - ba * h);
 }
 
-// 다각형까지의 부호 있는 거리(px). 안쪽이 양수.
+// 다각형까지의 부호 있는 거리(px). 안쪽이 양수. (꼭짓점이 겹치는 나비 모양도 처리)
 float polyDist(vec2 p) {
   float d = 1e9;
   bool inside = false;
-  for (int i = 0; i < 4; i++) {
-    vec2 a = uQuad[i] * uVideoSize;
-    vec2 b = uQuad[(i + 1) % 4] * uVideoSize;
+  for (int i = 0; i < 8; i++) {
+    if (i >= uCount) break;
+    vec2 a = uPoly[i] * uVideoSize;
+    vec2 b = uPoly[(i + 1) % uCount] * uVideoSize;
     d = min(d, segDist(p, a, b));
     if (((a.y > p.y) != (b.y > p.y)) && (p.x < (b.x - a.x) * (p.y - a.y) / (b.y - a.y) + a.x)) {
       inside = !inside;
@@ -252,12 +278,6 @@ void main() {
   float mask = smoothstep(-1.0, 1.0, d);
 
   vec3 styled = texture(uStyled, uv).rgb;
-  if (uUseAi > 0.5) {
-    vec2 local = (uv - uAiRect.xy) / uAiRect.zw;
-    if (all(greaterThanEqual(local, vec2(0.0))) && all(lessThanEqual(local, vec2(1.0)))) {
-      styled = texture(uAi, local).rgb;
-    }
-  }
 
   vec3 c = mix(base, styled, mask);
   if (uBorder > 0.0) {
@@ -289,7 +309,7 @@ function program(gl, vs, fs) {
   const uniforms = {};
   const n = gl.getProgramParameter(p, gl.ACTIVE_UNIFORMS);
   for (let i = 0; i < n; i++) {
-    const name = gl.getActiveUniform(p, i).name; // 배열은 "uQuad[0]" 형태
+    const name = gl.getActiveUniform(p, i).name; // 배열은 "uPoly[0]" 형태
     uniforms[name.replace(/\[0\]$/, '')] = gl.getUniformLocation(p, name);
   }
   return { p, u: uniforms };
@@ -334,9 +354,6 @@ export class Renderer {
     this.composite = program(gl, VS_SCREEN, FS_COMPOSITE);
 
     this.videoTex = makeTexture(gl);
-    this.aiTex = makeTexture(gl);
-    this.overlayTex = makeTexture(gl);
-    this.hairTex = makeTexture(gl);
     this.flat = null;
     this.styled = null;
     this.width = 0;
@@ -368,38 +385,16 @@ export class Renderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, video);
   }
 
-  uploadAi(rgba, w, h) {
-    const gl = this.gl;
-    gl.bindTexture(gl.TEXTURE_2D, this.aiTex);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
-  }
-
-  uploadOverlay(canvas) {
-    const gl = this.gl;
-    gl.bindTexture(gl.TEXTURE_2D, this.overlayTex);
-    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
-  }
-
-  uploadHair(mask) {
-    const gl = this.gl;
-    gl.bindTexture(gl.TEXTURE_2D, this.hairTex);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
-    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, mask.width, mask.height, 0, gl.RED, gl.UNSIGNED_BYTE, mask.data);
-    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
-  }
-
-  // opts: { quad, style, mirror, ai: {rect} | null, border, saiyan: {iris, head, up, time, burst} | null }
+  // opts: { poly: [{x,y}…] | null, style, mirror, border, time }
   render(opts) {
     const gl = this.gl;
-    const active = !!opts.quad;
+    const active = !!opts.poly;
 
     if (active) {
       const { w, h } = this.styled;
       const texel = [1 / w, 1 / h];
 
-      if (opts.style === STYLES.webtoon) {
+      if (NEEDS_SMOOTH.has(opts.style)) {
         gl.bindFramebuffer(gl.FRAMEBUFFER, this.flat.fb);
         gl.viewport(0, 0, w, h);
         gl.useProgram(this.smooth.p);
@@ -421,22 +416,7 @@ export class Renderer {
       gl.uniform1i(this.style.u.uFlat, 1);
       gl.uniform2fv(this.style.u.uTexel, texel);
       gl.uniform1i(this.style.u.uStyle, opts.style);
-      if (opts.style === STYLES.saiyan) {
-        const u = this.style.u;
-        const sy = opts.saiyan || {};
-        gl.activeTexture(gl.TEXTURE2);
-        gl.bindTexture(gl.TEXTURE_2D, this.overlayTex);
-        gl.activeTexture(gl.TEXTURE3);
-        gl.bindTexture(gl.TEXTURE_2D, this.hairTex);
-        gl.uniform1i(u.uOverlay, 2);
-        gl.uniform1i(u.uHair, 3);
-        gl.uniform3fv(u.uIris, sy.iris || [0, 0, 0, 0, 0, 0]);
-        gl.uniform4fv(u.uHead, sy.head || [0, 0, 1, 0]);
-        gl.uniform2fv(u.uUp, sy.up || [0, -1]);
-        gl.uniform2f(u.uVideoSize, this.width, this.height);
-        gl.uniform1f(u.uTime, sy.time || 0);
-        gl.uniform1f(u.uBurst, sy.burst || 0);
-      }
+      gl.uniform1f(this.style.u.uTime, opts.time || 0);
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 
@@ -448,21 +428,18 @@ export class Renderer {
     gl.bindTexture(gl.TEXTURE_2D, this.videoTex);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.styled.tex);
-    gl.activeTexture(gl.TEXTURE2);
-    gl.bindTexture(gl.TEXTURE_2D, this.aiTex);
     gl.uniform1i(c.u.uVideo, 0);
     gl.uniform1i(c.u.uStyled, 1);
-    gl.uniform1i(c.u.uAi, 2);
     gl.uniform1f(c.u.uActive, active ? 1 : 0);
     gl.uniform1f(c.u.uMirror, opts.mirror ? 1 : 0);
     gl.uniform2f(c.u.uVideoSize, this.width, this.height);
     gl.uniform1f(c.u.uBorder, opts.border || 0);
     if (active) {
-      gl.uniform2fv(c.u.uQuad, opts.quad.flatMap((p) => [p.x, p.y]));
+      const pts = new Float32Array(MAX_POINTS * 2);
+      opts.poly.slice(0, MAX_POINTS).forEach((p, i) => { pts[i * 2] = p.x; pts[i * 2 + 1] = p.y; });
+      gl.uniform2fv(c.u.uPoly, pts);
+      gl.uniform1i(c.u.uCount, Math.min(opts.poly.length, MAX_POINTS));
     }
-    const ai = opts.ai;
-    gl.uniform1f(c.u.uUseAi, ai ? 1 : 0);
-    if (ai) gl.uniform4f(c.u.uAiRect, ai.rect.x, ai.rect.y, ai.rect.w, ai.rect.h);
     gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
   }
 }

@@ -1,4 +1,6 @@
-// MediaPipe Hands → "손가락 프레임" 사각형(4꼭짓점) 계산
+// MediaPipe Hands → "손가락 프레임" 다각형 계산
+// - 두 손 모두 검지가 위(엄지가 아래): 사각형
+// - 한 손이라도 뒤집으면(검지가 아래, 엄지가 위): 가운데에서 만나는 삼각형 두 개 (⋈)
 import { FilesetResolver, HandLandmarker } from '../vendor/mediapipe/vision_bundle.js';
 
 const THUMB_TIP = 4;
@@ -45,6 +47,16 @@ function indexExtended(lm) {
   return dist(lm[WRIST], lm[INDEX_TIP]) > dist(lm[WRIST], lm[INDEX_PIP]) * 1.05;
 }
 
+// 손이 뒤집혔는지: 검지 끝이 엄지 끝보다 손 크기의 25% 이상 아래면 뒤집힘.
+// 그 사이 애매한 구간에서는 이전 상태를 유지해서 모양이 깜빡이지 않게 한다.
+function isFlipped(hand, prev) {
+  const size = dist(hand[WRIST], hand[9]) || 1e-6;
+  const d = (hand[INDEX_TIP].y - hand[THUMB_TIP].y) / size;
+  if (d > 0.25) return true;
+  if (d < -0.25) return false;
+  return prev;
+}
+
 // 꼭짓점을 중심 기준 각도로 정렬해서 꼬이지 않는 사각형으로 만든다
 function orderAroundCentroid(pts) {
   const cx = pts.reduce((s, p) => s + p.x, 0) / pts.length;
@@ -56,7 +68,9 @@ export class HandFrameTracker {
   constructor() {
     this.landmarker = null;
     this.filters = Array.from({ length: 8 }, () => new OneEuro());
-    this.quad = null;          // [{x,y}×4], 영상 기준 0~1 좌표 (좌우반전 전)
+    this.poly = null;          // 프레임 꼭짓점 [{x,y}…], 영상 기준 0~1 좌표 (좌우반전 전)
+    this.shape = null;         // 'rect' | 'bowtie'
+    this.flipped = [false, false];  // [왼쪽 손, 오른쪽 손] 뒤집힘 여부
     this.lastSeen = -Infinity;
     this.holdMs = 180;         // 손 인식이 잠깐 끊겨도 프레임을 유지하는 시간
     this.lastHands = [];       // 이번 프레임의 모든 손 랜드마크 (인사 자막·디버그 표시용)
@@ -85,7 +99,7 @@ export class HandFrameTracker {
     }
   }
 
-  // 영상 프레임 하나를 처리하고, 현재 프레임 사각형(없으면 null)을 돌려준다
+  // 영상 프레임 하나를 처리하고, 현재 프레임 다각형(없으면 null)을 돌려준다
   update(video, now) {
     const result = this.landmarker.detectForVideo(video, now);
     const hands = (result.landmarks || []).filter(indexExtended);
@@ -97,16 +111,30 @@ export class HandFrameTracker {
       const left = sorted[0];
       const right = sorted[sorted.length - 1];
       const raw = [left[INDEX_TIP], right[INDEX_TIP], right[THUMB_TIP], left[THUMB_TIP]];
-      const smoothed = raw.map((p, i) => ({
+      const [l8, r8, r4, l4] = raw.map((p, i) => ({
         x: this.filters[i * 2].filter(p.x, now),
         y: this.filters[i * 2 + 1].filter(p.y, now),
       }));
-      this.quad = orderAroundCentroid(smoothed);
+      this.flipped = [isFlipped(left, this.flipped[0]), isFlipped(right, this.flipped[1])];
+
+      if (this.flipped[0] || this.flipped[1]) {
+        // 삼각형 두 개: 각 손의 검지·엄지 끝 두 점 + 가운데 한 점
+        const c = { x: (l8.x + r8.x + r4.x + l4.x) / 4, y: (l8.y + r8.y + r4.y + l4.y) / 4 };
+        const [lu, ll] = l8.y < l4.y ? [l8, l4] : [l4, l8];
+        const [ru, rl] = r8.y < r4.y ? [r8, r4] : [r4, r8];
+        // 한 붓 그리기 순서: 왼쪽 위 → 가운데 → 오른쪽 위 → 오른쪽 아래 → 가운데 → 왼쪽 아래
+        this.poly = [lu, c, ru, rl, c, ll];
+        this.shape = 'bowtie';
+      } else {
+        this.poly = orderAroundCentroid([l8, r8, r4, l4]);
+        this.shape = 'rect';
+      }
       this.lastSeen = now;
     } else if (now - this.lastSeen > this.holdMs) {
-      this.quad = null;
+      this.poly = null;
+      this.shape = null;
       this.filters.forEach((f) => f.reset());
     }
-    return this.quad;
+    return this.poly;
   }
 }

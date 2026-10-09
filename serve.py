@@ -22,13 +22,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
         '.wasm': 'application/wasm',
         '.json': 'application/json',
         '.task': 'application/octet-stream',
-        '.onnx': 'application/octet-stream',
     }
 
     def end_headers(self):
-        # AI 모드가 CPU 멀티스레드(SharedArrayBuffer)를 쓰려면 cross-origin isolation 이 필요하다
-        self.send_header('Cross-Origin-Opener-Policy', 'same-origin')
-        self.send_header('Cross-Origin-Embedder-Policy', 'require-corp')
         self.send_header('Cache-Control', 'no-cache')
         super().end_headers()
 
