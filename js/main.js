@@ -156,14 +156,15 @@ function drawDebug() {
 
 // ---------- AI 모델 ----------
 async function loadAi(source, name) {
-  setStatus('AI 모델을 불러오는 중… (처음엔 10~30초 걸릴 수 있어요)');
+  setStatus('AI 모델을 불러오는 중… (처음엔 5~20초 걸릴 수 있어요)');
   try {
     await ai.load(source, name);
     setStatus('');
     state.style = 'ai';
   } catch (err) {
     console.error(err);
-    setStatus('AI 모델을 불러오지 못했어요. 인터넷 연결과 .onnx 파일을 확인해 주세요.', true);
+    setStatus('AI 모델을 불러오지 못했어요. .onnx 파일을 확인해 주세요. 웹툰 필터로 계속합니다.', true);
+    setTimeout(() => setStatus(''), 4000);
     state.style = 'webtoon';
   }
   syncButtons();
@@ -171,7 +172,7 @@ async function loadAi(source, name) {
 
 async function selectAi() {
   if (ai.ready) { state.style = 'ai'; syncButtons(); return; }
-  // models/anime.onnx 가 있으면 자동으로 사용, 없으면 파일 선택
+  // models/anime.onnx 를 기본으로 사용, 없으면 파일 선택
   const exists = await fetch(DEFAULT_AI_MODEL, { method: 'HEAD' }).then((r) => r.ok).catch(() => false);
   if (exists) loadAi(DEFAULT_AI_MODEL, DEFAULT_AI_MODEL);
   else aiFile.click();

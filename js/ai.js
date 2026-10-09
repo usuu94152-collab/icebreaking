@@ -1,15 +1,17 @@
-// (선택) AnimeGANv3 ONNX 모델로 손가락 프레임 영역을 AI 애니 스타일로 변환
-// onnxruntime-web 은 AI 모드를 켤 때만 CDN 에서 불러온다 (인터넷 필요).
+// AI 애니 모드: 손가락 프레임 영역을 AnimeGAN 계열 ONNX 모델로 변환
+// - 기본 모델: models/anime.onnx (AnimeGANv2 face_paint_512_v2, 입력 크기 자유)
+// - AnimeGANv3 .onnx 도 파일 선택으로 불러올 수 있다 (입력 형식 NCHW/NHWC 자동 판별)
+// onnxruntime-web 은 vendor/ 에 포함되어 있어 인터넷 없이 동작한다.
 
-const ORT_VERSION = '1.20.1';
-const ORT_BASE = `https://cdn.jsdelivr.net/npm/onnxruntime-web@${ORT_VERSION}/dist/`;
+const ORT_DIR = new URL('../vendor/onnxruntime/', import.meta.url).href;
 
 export class AiStylizer {
   constructor() {
     this.session = null;
     this.busy = false;
     this.maxSide = 384;      // 추론 해상도 (클수록 선명하지만 느림)
-    this.multiple = 8;       // AnimeGANv3 입력은 8의 배수 (tiny 모델은 16)
+    this.multiple = 8;       // 입력 크기 배수 (AnimeGANv3 tiny 모델은 16)
+    this.layout = 'nchw';
     this.provider = null;
     this.lastMs = 0;
     this.canvas = document.createElement('canvas');
@@ -20,8 +22,9 @@ export class AiStylizer {
 
   // source: File 객체 또는 URL 문자열
   async load(source, name = '') {
-    const ort = await import(`${ORT_BASE}ort.all.min.mjs`);
-    ort.env.wasm.wasmPaths = ORT_BASE;
+    const ort = await import(`${ORT_DIR}ort.all.min.mjs`);
+    ort.env.wasm.wasmPaths = ORT_DIR;
+    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.min(4, navigator.hardwareConcurrency || 1) : 1;
     const bytes = source instanceof Blob
       ? new Uint8Array(await source.arrayBuffer())
       : new Uint8Array(await (await fetch(source)).arrayBuffer());
@@ -32,19 +35,37 @@ export class AiStylizer {
     let lastErr;
     for (const ep of providers) {
       try {
-        this.session = await ort.InferenceSession.create(bytes, { executionProviders: [ep] });
+        const session = await ort.InferenceSession.create(bytes, { executionProviders: [ep] });
+        this.inputName = session.inputNames[0];
+        this.session = session;
+        // 입력 형식 판별 + 첫 실행 워밍업 (첫 추론은 느리다)
+        this.layout = await this.detectLayout();
         this.provider = ep;
         break;
       } catch (err) {
+        this.session = null;
         lastErr = err;
         console.warn(`AI 모델 ${ep} 로드 실패`, err);
       }
     }
     if (!this.session) throw lastErr;
-    this.inputName = this.session.inputNames[0];
-    // 처음 한 번은 느리므로 미리 데워둔다
+    // GPU 면 더 선명하게, CPU 면 가볍게
+    this.maxSide = this.provider === 'webgpu' ? 448 : 320;
+  }
+
+  async detectLayout() {
     const s = 256;
-    await this.session.run({ [this.inputName]: new ort.Tensor('float32', new Float32Array(s * s * 3), [1, s, s, 3]) });
+    const zeros = new Float32Array(s * s * 3);
+    for (const layout of ['nchw', 'nhwc']) {
+      const dims = layout === 'nchw' ? [1, 3, s, s] : [1, s, s, 3];
+      try {
+        await this.session.run({ [this.inputName]: new this.ort.Tensor('float32', zeros, dims) });
+        return layout;
+      } catch {
+        // 다른 형식으로 재시도
+      }
+    }
+    throw new Error('지원하지 않는 모델 입력 형식입니다.');
   }
 
   // 손가락 사각형을 감싸는 영역(여백 포함)을 0~1 좌표로 계산
@@ -65,40 +86,41 @@ export class AiStylizer {
     const vw = video.videoWidth, vh = video.videoHeight;
     const rect = AiStylizer.cropRect(quad, vw / vh);
     const pw = rect.w * vw, ph = rect.h * vh;
-    const scale = Math.min(1, this.maxSide / Math.max(pw, ph));
+    const scale = this.maxSide / Math.max(pw, ph);
     const m = this.multiple;
-    const w = Math.max(256, Math.round((pw * scale) / m) * m);
-    const h = Math.max(256, Math.round((ph * scale) / m) * m);
+    const w = Math.max(128, Math.round((pw * scale) / m) * m);
+    const h = Math.max(128, Math.round((ph * scale) / m) * m);
 
     this.canvas.width = w;
     this.canvas.height = h;
     this.ctx.drawImage(video, rect.x * vw, rect.y * vh, pw, ph, 0, 0, w, h);
     const px = this.ctx.getImageData(0, 0, w, h).data;
 
-    // RGB, NHWC, [-1, 1]
-    const input = new Float32Array(w * h * 3);
-    for (let i = 0, j = 0; i < px.length; i += 4, j += 3) {
-      input[j] = px[i] / 127.5 - 1;
-      input[j + 1] = px[i + 1] / 127.5 - 1;
-      input[j + 2] = px[i + 2] / 127.5 - 1;
+    // RGB, [-1, 1]
+    const plane = w * h;
+    const input = new Float32Array(plane * 3);
+    const nchw = this.layout === 'nchw';
+    for (let i = 0; i < plane; i++) {
+      for (let c = 0; c < 3; c++) {
+        input[nchw ? c * plane + i : i * 3 + c] = px[i * 4 + c] / 127.5 - 1;
+      }
     }
+    const dims = nchw ? [1, 3, h, w] : [1, h, w, 3];
 
     const t0 = performance.now();
-    const out = await this.session.run({
-      [this.inputName]: new this.ort.Tensor('float32', input, [1, h, w, 3]),
-    });
+    const out = await this.session.run({ [this.inputName]: new this.ort.Tensor('float32', input, dims) });
     this.lastMs = performance.now() - t0;
     const tensor = out[this.session.outputNames[0]];
     const data = tensor.data;
-    const nchw = tensor.dims.length === 4 && tensor.dims[1] === 3;
-    const oh = nchw ? tensor.dims[2] : tensor.dims[1];
-    const ow = nchw ? tensor.dims[3] : tensor.dims[2];
-    const plane = ow * oh;
+    const outNchw = tensor.dims.length === 4 && tensor.dims[1] === 3;
+    const oh = outNchw ? tensor.dims[2] : tensor.dims[1];
+    const ow = outNchw ? tensor.dims[3] : tensor.dims[2];
+    const oplane = ow * oh;
 
-    const rgba = new Uint8ClampedArray(plane * 4);
-    for (let i = 0; i < plane; i++) {
+    const rgba = new Uint8ClampedArray(oplane * 4);
+    for (let i = 0; i < oplane; i++) {
       for (let c = 0; c < 3; c++) {
-        const v = nchw ? data[c * plane + i] : data[i * 3 + c];
+        const v = outNchw ? data[c * oplane + i] : data[i * 3 + c];
         rgba[i * 4 + c] = (v + 1) * 127.5;
       }
       rgba[i * 4 + 3] = 255;

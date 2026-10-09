@@ -5,7 +5,7 @@
 
 - 손 인식: MediaPipe Hand Landmarker (브라우저에서 실행, 모델 파일 포함 → **인터넷 없어도 동작**)
 - 스타일 변환: WebGL 셰이더 (일반 노트북 내장 그래픽으로도 실시간)
-- 선택 기능: AnimeGANv3 AI 모델(.onnx)을 넣으면 진짜 애니 그림체로 변환
+- AI 애니 모드: AnimeGANv2 얼굴→애니 모델 포함 (`4` 키)
 
 ## 실행 방법
 
@@ -19,11 +19,13 @@
    - macOS: `start.command`
 3. 브라우저가 `http://localhost:8000` 으로 열리면 카메라 권한을 **허용**합니다.
 
-> 두 스크립트 모두 Python 이 필요합니다. 없다면 터미널에서 이 폴더로 이동한 뒤 `npx serve` 로 실행해도 됩니다.
+> 두 스크립트 모두 Python 이 필요합니다 (`serve.py` 를 실행합니다). 터미널에서 `python serve.py` 로 직접 켜도 됩니다.
+> `serve.py` 는 AI 모드가 CPU 멀티스레드를 쓸 수 있게 필요한 헤더도 같이 보내줍니다.
 
 ### 방법 2. GitHub Pages
 
 레포 Settings → Pages 에서 이 브랜치를 배포하면 `https://<아이디>.github.io/icebreaking/` 주소로 바로 열 수 있습니다.
+단, GitHub Pages 에서는 AI 모드가 CPU 싱글스레드로만 돌아서 WebGPU 가 없는 노트북에서는 느립니다.
 
 **브라우저는 최신 Chrome 이나 Edge 를 권장합니다.**
 
@@ -48,22 +50,30 @@
 - 프로젝터 화면에 띄울 때는 거울 모드(기본값)가 자연스럽습니다.
 - 손이 화면에 잘 보이도록 밝은 곳에서, 웹캠에서 1m 정도 떨어지면 인식이 잘 됩니다.
 
-## (선택) AI 애니 모드
+## AI 애니 모드 (`4` 키)
 
-기본 웹툰 필터는 셰이더로 만든 "만화풍 보정"이라, 얼굴 자체를 애니 캐릭터 그림체로 다시 그려 주지는 않습니다.
-원본 영상처럼 진짜 애니 얼굴을 원하면 **AnimeGANv3** 모델을 추가해서 쓸 수 있습니다.
+기본 웹툰 필터는 셰이더로 만든 "만화풍 보정"이고, AI 애니 모드는 딥러닝 모델이 얼굴을 애니 그림체로 다시 그립니다.
+모델(`models/anime.onnx`)과 실행 엔진(onnxruntime-web)이 레포에 들어 있어서 **별도 다운로드나 인터넷 없이** 바로 됩니다.
 
-1. AnimeGANv3 `.onnx` 모델을 내려받습니다.
-   - 예: [AnimeGANv3_large_Ghibli_c1_e299.onnx](https://github.com/TachibanaYoshino/AnimeGANv3_Portrait_Inference/releases/download/1.0/AnimeGANv3_large_Ghibli_c1_e299.onnx)
-   - 다른 스타일: [AnimeGANv3 레포](https://github.com/TachibanaYoshino/AnimeGANv3) 참고
-2. 다음 둘 중 하나로 불러옵니다.
-   - `AI 애니` 버튼(`4`)을 누르면 파일 선택 창이 뜨니 `.onnx` 파일을 고릅니다.
-   - 또는 파일을 `models/anime.onnx` 로 저장해 두면 버튼을 누를 때 자동으로 불러옵니다.
+- 처음 켤 때 모델을 불러오느라 5~20초 걸립니다. 강의 시작 전에 미리 한 번 눌러 두세요.
+- AI 변환은 영상보다 느리게 갱신됩니다(뚝뚝 끊기는 느낌). 속도는 노트북에 따라 다릅니다.
+  - WebGPU 지원 Chrome/Edge + 그래픽 성능이 괜찮으면 부드럽게 갱신됩니다.
+  - CPU 로 돌면 1초에 1~3번 정도 갱신됩니다.
+  - `D` 키를 누르면 왼쪽 위에 `AI webgpu`/`AI wasm` 과 한 장당 처리 시간이 표시됩니다.
+- 얼굴이 프레임 안에 크게 들어올수록 결과가 좋습니다.
 
-주의할 점:
-- AI 실행 엔진(onnxruntime-web)은 CDN에서 받아오므로 이 모드는 **인터넷이 필요**합니다.
-- WebGPU를 지원하는 Chrome/Edge에서 빠르게 돌고, 지원하지 않으면 CPU(WASM)로 느리게 돕니다. AI 결과는 영상보다 늦게 갱신될 수 있으니 강의 전에 실제 노트북에서 꼭 미리 테스트해 보세요.
-- AnimeGANv3 모델은 원저작자 라이선스(비상업적 사용)를 따릅니다.
+### 다른 AI 모델로 바꾸기
+
+`models/anime.onnx` 를 다른 AnimeGAN 계열 `.onnx` 파일로 바꾸면 됩니다 (입력 형식 NCHW/NHWC 자동 판별).
+`models/anime.onnx` 가 없으면 `AI 애니` 버튼을 누를 때 파일 선택 창이 뜹니다.
+
+- AnimeGANv3 모델: [AnimeGANv3 레포](https://github.com/TachibanaYoshino/AnimeGANv3) (원저작자 라이선스: 비상업적 사용)
+
+### 포함된 모델 정보
+
+`models/anime.onnx` 는 [bryandlee/animegan2-pytorch](https://github.com/bryandlee/animegan2-pytorch) 의 `face_paint_512_v2` (MIT) 를
+ONNX 로 변환한 모델입니다. 원래는 512×512 입력만 받는데, 작은 크기로도 빠르게 돌 수 있도록 고정 크기 연산을 입력 크기에 따라가게 고쳤습니다
+(512×512 에서는 원본과 출력이 동일함을 확인).
 
 ## 구조
 
@@ -73,9 +83,11 @@ css/style.css       스타일
 js/main.js          카메라, 렌더 루프, 단축키
 js/hands.js         MediaPipe 손 인식 → 손가락 프레임 사각형 계산 (One Euro 필터로 떨림 보정)
 js/renderer.js      WebGL2 셰이더: 웹툰/스케치/픽셀 변환 + 프레임 안쪽만 합성
-js/ai.js            (선택) AnimeGANv3 ONNX 추론
+js/ai.js            AI 애니 모드 (ONNX 추론)
+serve.py            로컬 서버 (start.bat / start.command 가 실행)
 vendor/mediapipe/   MediaPipe Tasks Vision 0.10.14 (Apache-2.0)
-models/             hand_landmarker.task (MediaPipe 손 인식 모델)
+vendor/onnxruntime/ onnxruntime-web 1.20.1 (MIT)
+models/             hand_landmarker.task (MediaPipe 손 인식), anime.onnx (AI 애니 모델)
 ```
 
 프레임 사각형은 왼손 검지 끝 → 오른손 검지 끝 → 오른손 엄지 끝 → 왼손 엄지 끝(랜드마크 8, 4번) 네 점으로 만듭니다.
