@@ -318,7 +318,7 @@ function makeTarget(gl, w, h) {
 
 export class Renderer {
   constructor(canvas) {
-    const gl = canvas.getContext('webgl2', { preserveDrawingBuffer: true, antialias: false });
+    const gl = canvas.getContext('webgl2', { antialias: false, desynchronized: true });
     if (!gl) throw new Error('이 브라우저는 WebGL2를 지원하지 않습니다. 최신 Chrome/Edge를 사용해 주세요.');
     this.gl = gl;
     this.canvas = canvas;

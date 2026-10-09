@@ -38,11 +38,15 @@ export class SaiyanFx {
   // landmarks: 얼굴 랜드마크(없으면 null), w/h: 영상 크기(px), t: 초
   draw(landmarks, w, h, t) {
     const { canvas, ctx } = this;
-    if (canvas.width !== w || canvas.height !== h) {
-      canvas.width = w;
-      canvas.height = h;
+    // 절반 해상도로 그려서 그리기·업로드 비용을 1/4 로 (좌표는 원본 기준 그대로 사용)
+    const S = 0.5;
+    if (canvas.width !== Math.round(w * S) || canvas.height !== Math.round(h * S)) {
+      canvas.width = Math.round(w * S);
+      canvas.height = Math.round(h * S);
     }
-    ctx.clearRect(0, 0, w, h);
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(S, 0, 0, S, 0, 0);
     if (!landmarks) {
       this.uniforms = null;
       return;
@@ -173,11 +177,10 @@ export class SaiyanFx {
     }
     this.bolts = this.bolts.filter((b) => b.until > t);
     ctx.save();
-    ctx.lineJoin = 'miter';
-    ctx.shadowColor = '#7df9ff';
-    ctx.shadowBlur = 14;
+    ctx.lineJoin = 'round';
     for (const b of this.bolts) {
-      for (const [color, width] of [['rgba(125, 249, 255, 0.9)', 6], ['#ffffff', 2]]) {
+      // 빛번짐은 shadowBlur 대신 굵은 반투명 선을 겹쳐서 (훨씬 가볍다)
+      for (const [color, width] of [['rgba(125, 249, 255, 0.25)', 16], ['rgba(125, 249, 255, 0.9)', 6], ['#ffffff', 2]]) {
         ctx.strokeStyle = color;
         ctx.lineWidth = width;
         ctx.beginPath();

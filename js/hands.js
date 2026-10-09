@@ -8,7 +8,7 @@ const WRIST = 0;
 
 // 손떨림을 줄이는 One Euro Filter (빠르게 움직일 땐 덜 부드럽게, 멈춰 있을 땐 더 부드럽게)
 class OneEuro {
-  constructor(minCutoff = 1.5, beta = 8, dCutoff = 1.0) {
+  constructor(minCutoff = 3.0, beta = 25, dCutoff = 1.0) {
     this.minCutoff = minCutoff;
     this.beta = beta;
     this.dCutoff = dCutoff;

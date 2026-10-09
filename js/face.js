@@ -23,7 +23,8 @@ export class FaceTracker {
     this.face = null;
     this.hair = null;
     this.landmarks = null;   // 478개 (눈동자 포함), 0~1 좌표
-    this.hairMask = null;    // { data: Uint8Array, width, height }
+    this.hairMask = null;    // { data: Uint8Array, width, height } (1/4 해상도)
+    this.hairVersion = 0;    // 마스크가 갱신될 때마다 증가 (텍스처 재업로드 판단용)
     this.loading = null;
   }
 
@@ -46,19 +47,27 @@ export class FaceTracker {
     return this.loading;
   }
 
-  update(video, now) {
+  // withHair: 머리카락 분할까지 할지. GPU→CPU 로 마스크를 꺼내오는 비용이 커서 몇 프레임에 한 번만 한다.
+  update(video, now, withHair) {
     const res = this.face.detectForVideo(video, now);
     this.landmarks = res.faceLandmarks && res.faceLandmarks[0] ? res.faceLandmarks[0] : null;
+    if (!withHair) return;
 
     this.hair.segmentForVideo(video, now, (result) => {
       const mask = result.confidenceMasks && result.confidenceMasks[result.confidenceMasks.length - 1];
       if (!mask) return;
       const f = mask.getAsFloat32Array();
-      if (!this.hairMask || this.hairMask.data.length !== f.length) {
-        this.hairMask = { data: new Uint8Array(f.length), width: mask.width, height: mask.height };
+      const S = 4;
+      const w = Math.floor(mask.width / S), h = Math.floor(mask.height / S);
+      if (!this.hairMask || this.hairMask.width !== w || this.hairMask.height !== h) {
+        this.hairMask = { data: new Uint8Array(w * h), width: w, height: h };
       }
       const out = this.hairMask.data;
-      for (let i = 0; i < f.length; i++) out[i] = f[i] * 255;
+      for (let y = 0; y < h; y++) {
+        const row = y * S * mask.width;
+        for (let x = 0; x < w; x++) out[y * w + x] = f[row + x * S] * 255;
+      }
+      this.hairVersion++;
     });
   }
 }

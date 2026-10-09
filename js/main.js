@@ -27,6 +27,7 @@ const state = {
   aiResult: null,
   lastQuadAt: 0,
   burstAt: -Infinity,  // 초사이어인 변신 시작 시각
+  timing: { hand: 0, face: 0, render: 0 },  // 단계별 처리 시간(ms), D 키로 표시
 };
 window.__app = state; // 디버그용 (콘솔에서 상태 확인)
 
@@ -79,6 +80,15 @@ async function listCameras() {
 let lastVideoTime = -1;
 let frames = 0;
 let fpsT0 = performance.now();
+let saiyanFrame = 0;
+let hairUploaded = -1;
+let captureRequested = false;
+
+// 처리 시간을 부드럽게 평균 내서 기록
+function track(key, t0) {
+  const ms = performance.now() - t0;
+  state.timing[key] = state.timing[key] * 0.9 + ms * 0.1;
+}
 
 function loop() {
   requestAnimationFrame(loop);
@@ -89,17 +99,24 @@ function loop() {
   renderer.resize(video.videoWidth, video.videoHeight);
   const hadQuad = !!state.quad;
   state.quad = tracker.update(video, now);
+  track('hand', now);
   if (state.quad) state.lastQuadAt = now;
   renderer.uploadVideo(video);
 
   // 초사이어인: 프레임이 생기는 순간 변신 연출, 프레임 안에서 얼굴·머리카락 추적
   let saiyanOpts = null;
   if (state.style === 'saiyan' && face.ready && state.quad) {
-    if (!hadQuad) state.burstAt = now;
-    face.update(video, now);
+    if (!hadQuad) { state.burstAt = now; saiyanFrame = 0; }
+    const tf = performance.now();
+    // 얼굴은 매 프레임, 머리카락은 3프레임에 한 번 (머리카락은 천천히 바뀌므로 충분)
+    face.update(video, now, saiyanFrame++ % 3 === 0);
+    track('face', tf);
     saiyan.draw(face.landmarks, video.videoWidth, video.videoHeight, now / 1000);
     renderer.uploadOverlay(saiyan.canvas);
-    if (face.hairMask) renderer.uploadHair(face.hairMask);
+    if (face.hairMask && face.hairVersion !== hairUploaded) {
+      renderer.uploadHair(face.hairMask);
+      hairUploaded = face.hairVersion;
+    }
     const burst = Math.max(0, 1 - (now - state.burstAt) / 700);
     saiyanOpts = { ...saiyan.uniforms, time: now / 1000, burst };
     shake(burst);
@@ -125,6 +142,7 @@ function loop() {
   }
   if (!state.quad) state.aiResult = null;
 
+  const tr = performance.now();
   renderer.render({
     quad: state.quad,
     style: state.style === 'ai' ? STYLES.webtoon : STYLES[state.style],
@@ -133,6 +151,12 @@ function loop() {
     ai: useAi && state.aiResult ? { rect: state.aiResult.rect } : null,
     saiyan: saiyanOpts,
   });
+  track('render', tr);
+  // 캡처는 그린 직후에 (매 프레임 화면 버퍼를 보존하지 않아도 되도록)
+  if (captureRequested) {
+    captureRequested = false;
+    saveCanvas();
+  }
 
   hint.classList.toggle('show', now - state.lastQuadAt > 4000);
   drawDebug();
@@ -156,13 +180,17 @@ function shake(amount) {
 }
 
 // D 키: 손 랜드마크와 FPS 표시
+let debugDrawn = false;
 function drawDebug() {
+  // 디버그를 끈 상태에선 한 번만 지우고 매 프레임 그리지 않는다
+  if (!state.debug && !debugDrawn) return;
   const ctx = overlay.getContext('2d');
   if (overlay.width !== canvas.width || overlay.height !== canvas.height) {
     overlay.width = canvas.width;
     overlay.height = canvas.height;
   }
   ctx.clearRect(0, 0, overlay.width, overlay.height);
+  debugDrawn = state.debug;
   if (!state.debug) return;
   const W = overlay.width, H = overlay.height;
   const X = (x) => (state.mirror ? 1 - x : x) * W;
@@ -186,6 +214,9 @@ function drawDebug() {
   ctx.fillStyle = '#fff';
   const aiInfo = ai.ready ? ` · AI ${ai.provider} ${Math.round(ai.lastMs)}ms` : '';
   ctx.fillText(`${state.fps} fps · 손 인식 ${tracker.delegate}${aiInfo}`, 16, 32);
+  const t = state.timing;
+  const faceInfo = state.style === 'saiyan' ? ` · 얼굴 ${t.face.toFixed(1)}ms` : '';
+  ctx.fillText(`손 ${t.hand.toFixed(1)}ms${faceInfo} · 그리기 ${t.render.toFixed(1)}ms`, 16, 60);
 }
 
 // ---------- AI 모델 ----------
@@ -253,6 +284,12 @@ function toggleFullscreen() {
 }
 
 function capture() {
+  captureRequested = true;
+  document.body.classList.add('flash');
+  setTimeout(() => document.body.classList.remove('flash'), 150);
+}
+
+function saveCanvas() {
   canvas.toBlob((blob) => {
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
@@ -260,8 +297,6 @@ function capture() {
     a.click();
     setTimeout(() => URL.revokeObjectURL(a.href), 1000);
   }, 'image/png');
-  document.body.classList.add('flash');
-  setTimeout(() => document.body.classList.remove('flash'), 150);
 }
 
 document.querySelectorAll('[data-style]').forEach((b) => b.addEventListener('click', () => setStyle(b.dataset.style)));
