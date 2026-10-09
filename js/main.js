@@ -3,7 +3,7 @@ import { Renderer, STYLES } from './renderer.js';
 import { AiStylizer } from './ai.js';
 import { FaceTracker } from './face.js';
 import { SaiyanFx } from './saiyan.js';
-import { GreetingCaption } from './greeting.js';
+import { GreetingCaption, countFingers, thumbOut } from './greeting.js';
 
 const $ = (sel) => document.querySelector(sel);
 const video = $('#video');
@@ -199,13 +199,23 @@ function drawDebug() {
   if (!state.debug) return;
   const W = overlay.width, H = overlay.height;
   const X = (x) => (state.mirror ? 1 - x : x) * W;
-  ctx.fillStyle = '#00e5ff';
+  ctx.font = 'bold 28px system-ui, sans-serif';
   for (const hand of tracker.lastHands) {
+    ctx.fillStyle = '#00e5ff';
     for (const p of hand) {
       ctx.beginPath();
       ctx.arc(X(p.x), p.y * H, 4, 0, Math.PI * 2);
       ctx.fill();
     }
+    // 손목 아래에 인식된 손가락 개수와 엄지 값 표시 (인사 자막 확인용)
+    const label = `손가락 ${countFingers(hand, caption.shown) ?? '-'} · 엄지 ${thumbOut(hand).toFixed(2)}`;
+    const tw = ctx.measureText(label).width;
+    const lx = Math.min(Math.max(X(hand[0].x) - tw / 2, 8), W - tw - 8);
+    const ly = Math.min(hand[0].y * H + 48, H - 12);
+    ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
+    ctx.fillRect(lx - 8, ly - 30, tw + 16, 40);
+    ctx.fillStyle = '#fff';
+    ctx.fillText(label, lx, ly);
   }
   if (state.quad) {
     ctx.strokeStyle = '#ff3d71';

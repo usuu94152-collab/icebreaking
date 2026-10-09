@@ -22,19 +22,27 @@ function fingerExtended(lm, [mcp, pip, tip]) {
   return dist(w, lm[tip]) > dist(w, lm[pip]) * 1.1 && dist(w, lm[tip]) > dist(w, lm[mcp]) * 1.25;
 }
 
-// 엄지: 끝이 검지 뿌리에서 떨어져 있고, 새끼 뿌리 쪽으로 접혀 있지 않으면 펴진 것
-function thumbExtended(lm) {
-  const palm = dist(lm[0], lm[9]);
-  return dist(lm[4], lm[5]) > palm * 0.55 && dist(lm[4], lm[17]) > dist(lm[3], lm[17]);
+// 엄지가 손바닥 바깥으로 얼마나 나와 있는지.
+// 새끼 뿌리 → 검지 뿌리 방향을 축으로 잡고, 엄지 끝이 검지 뿌리보다 바깥으로 나온 정도를
+// 손바닥 폭 대비 비율로 계산한다. (손 크기·기울기·손바닥/손등 방향과 무관)
+// 접으면 손바닥 안쪽이라 0 이하, 펴면 보통 0.3 이상 (실제 손에서 0.15 정도로 작게 나오기도 함).
+export function thumbOut(lm) {
+  const ix = lm[5], pk = lm[17], tip = lm[4];
+  const width = dist(ix, pk) || 1e-6;
+  const ux = (ix.x - pk.x) / width, uy = (ix.y - pk.y) / width;
+  return ((tip.x - ix.x) * ux + (tip.y - ix.y) * uy) / width;
 }
+const THUMB_OUT = 0.15;
+const THUMB_OUT_HOLD = 0.05;  // 이미 5 를 보여주는 중이면 기준을 낮춰서 4↔5 깜빡임 방지
 
 // 1~5 (자막 번호) 또는 null (해당 없는 손 모양 / 주먹)
 // 검지부터 차례로 펴야 인정한다: 검지 / 검지+중지 / … (새끼만 편 손 등은 무시)
-export function countFingers(lm) {
+// shown: 지금 보이는 자막 번호 (엄지 기준을 정할 때 사용)
+export function countFingers(lm, shown = null) {
   const ext = FINGERS.map((f) => fingerExtended(lm, f));
   const n = ext.indexOf(false) === -1 ? 4 : ext.indexOf(false);
   if (n === 0 || ext.slice(n).some(Boolean)) return null;
-  if (n === 4 && thumbExtended(lm)) return 5;
+  if (n === 4 && thumbOut(lm) > (shown === 5 ? THUMB_OUT_HOLD : THUMB_OUT)) return 5;
   return n;
 }
 
@@ -56,7 +64,7 @@ export class GreetingCaption {
     if (active && hands.length) {
       // 손이 둘이면 더 높이 든 손 기준
       const hand = hands.reduce((a, b) => (a[0].y < b[0].y ? a : b));
-      value = countFingers(hand);
+      value = countFingers(hand, this.shown);
     }
 
     if (value !== null) {
