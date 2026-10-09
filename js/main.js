@@ -3,6 +3,7 @@ import { Renderer, STYLES } from './renderer.js';
 import { AiStylizer } from './ai.js';
 import { FaceTracker } from './face.js';
 import { SaiyanFx } from './saiyan.js';
+import { GreetingCaption } from './greeting.js';
 
 const $ = (sel) => document.querySelector(sel);
 const video = $('#video');
@@ -27,6 +28,7 @@ const state = {
   aiResult: null,
   lastQuadAt: 0,
   burstAt: -Infinity,  // 초사이어인 변신 시작 시각
+  greeting: true,      // 한 손 손가락 개수로 인사 자막
   timing: { hand: 0, face: 0, render: 0 },  // 단계별 처리 시간(ms), D 키로 표시
 };
 window.__app = state; // 디버그용 (콘솔에서 상태 확인)
@@ -37,6 +39,7 @@ const ai = new AiStylizer();
 const face = new FaceTracker();
 window.__face = face;
 const saiyan = new SaiyanFx();
+const caption = new GreetingCaption($('#caption'));
 let renderer;
 let stream;
 
@@ -158,7 +161,9 @@ function loop() {
     saveCanvas();
   }
 
-  hint.classList.toggle('show', now - state.lastQuadAt > 4000);
+  // 인사 자막: 양손 프레임이 없을 때만 (프레임 효과가 우선)
+  caption.update(tracker.lastHands, now, state.greeting && !state.quad);
+  hint.classList.toggle('show', now - state.lastQuadAt > 4000 && caption.shown === null);
   drawDebug();
 
   frames++;
@@ -254,6 +259,7 @@ function syncButtons() {
   document.querySelectorAll('[data-style]').forEach((b) => b.classList.toggle('on', b.dataset.style === state.style));
   $('#btn-mirror').classList.toggle('on', state.mirror);
   $('#btn-border').classList.toggle('on', state.border);
+  $('#btn-greet').classList.toggle('on', state.greeting);
 }
 
 async function selectSaiyan() {
@@ -302,6 +308,7 @@ function saveCanvas() {
 document.querySelectorAll('[data-style]').forEach((b) => b.addEventListener('click', () => setStyle(b.dataset.style)));
 $('#btn-mirror').addEventListener('click', () => { state.mirror = !state.mirror; syncButtons(); });
 $('#btn-border').addEventListener('click', () => { state.border = !state.border; syncButtons(); });
+$('#btn-greet').addEventListener('click', () => { state.greeting = !state.greeting; syncButtons(); });
 $('#btn-full').addEventListener('click', toggleFullscreen);
 $('#btn-shot').addEventListener('click', capture);
 cameraSelect.addEventListener('change', () => startCamera(cameraSelect.value).catch(showCameraError));
@@ -313,6 +320,7 @@ window.addEventListener('keydown', (e) => {
   if (map[key]) setStyle(map[key]);
   else if (key === 'm') { state.mirror = !state.mirror; syncButtons(); }
   else if (key === 'b') { state.border = !state.border; syncButtons(); }
+  else if (key === 'g') { state.greeting = !state.greeting; syncButtons(); }
   else if (key === 'f') toggleFullscreen();
   else if (key === 's') capture();
   else if (key === 'd') state.debug = !state.debug;

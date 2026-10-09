@@ -52,6 +52,47 @@ html, body {
 #hint.show { opacity: 1; }
 #hint b { color: var(--accent); }
 
+/* 인사 자막 */
+#caption {
+  position: fixed;
+  left: 16px;
+  right: 16px;
+  bottom: max(18vh, 110px);   /* 하단 툴바와 겹치지 않게 */
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 14px;
+  opacity: 0;
+  transition: opacity 0.25s;
+  pointer-events: none;
+}
+#caption.show { opacity: 1; }
+#caption .text {
+  padding: 0.35em 0.9em;
+  border-radius: 0.5em;
+  background: rgba(10, 10, 14, 0.62);
+  font-size: clamp(32px, 6vw, 96px);
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  text-align: center;
+  word-break: keep-all;
+  text-shadow: 0 3px 12px rgba(0, 0, 0, 0.5);
+}
+#caption .text.pop { animation: pop 0.35s cubic-bezier(0.2, 1.4, 0.4, 1); }
+@keyframes pop {
+  from { transform: scale(0.7); opacity: 0.3; }
+  to { transform: scale(1); opacity: 1; }
+}
+#caption .dots { display: flex; gap: 10px; }
+#caption .dots i {
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: rgba(255, 255, 255, 0.35);
+  transition: background 0.2s;
+}
+#caption .dots i.on { background: var(--accent); }
+
 #status {
   position: fixed;
   left: 50%;

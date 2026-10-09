@@ -59,7 +59,7 @@ export class HandFrameTracker {
     this.quad = null;          // [{x,y}×4], 영상 기준 0~1 좌표 (좌우반전 전)
     this.lastSeen = -Infinity;
     this.holdMs = 180;         // 손 인식이 잠깐 끊겨도 프레임을 유지하는 시간
-    this.lastHands = [];       // 디버그 표시용 랜드마크
+    this.lastHands = [];       // 이번 프레임의 모든 손 랜드마크 (인사 자막·디버그 표시용)
     this.delegate = null;
   }
 
