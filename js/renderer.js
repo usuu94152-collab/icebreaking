@@ -7,6 +7,7 @@ export const STYLES = {
   webtoon: 0,
   sketch: 1,
   pixel: 2,
+  saiyan: 3,
 };
 
 const VS_PASS = `#version 300 es
@@ -60,6 +61,15 @@ uniform sampler2D uSrc;    // 원본 영상
 uniform sampler2D uFlat;   // bilateral 결과
 uniform vec2 uTexel;
 uniform int uStyle;
+// 초사이어인 전용
+uniform sampler2D uOverlay;  // 뾰족 머리·번개 (2D 캔버스)
+uniform sampler2D uHair;     // 머리카락 마스크
+uniform vec3 uIris[2];       // 눈동자 중심(x, y) + 반지름(px)
+uniform vec4 uHead;          // 머리 중심(x, y), 반지름(px), 얼굴 인식 여부
+uniform vec2 uUp;            // 머리 위쪽 방향
+uniform vec2 uVideoSize;
+uniform float uTime;
+uniform float uBurst;        // 변신 순간 번쩍임 (1 → 0)
 
 float luma(vec3 c) { return dot(c, vec3(0.299, 0.587, 0.114)); }
 
@@ -123,11 +133,75 @@ vec3 pixel() {
   return c * (1.0 - 0.12 * min(grid, 1.0));
 }
 
+float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+float noise(vec2 p) {
+  vec2 i = floor(p), f = fract(p);
+  vec2 u = f * f * (3.0 - 2.0 * f);
+  return mix(mix(hash(i), hash(i + vec2(1, 0)), u.x), mix(hash(i + vec2(0, 1)), hash(i + vec2(1, 1)), u.x), u.y);
+}
+float fbm(vec2 p) {
+  float v = 0.0, a = 0.5;
+  for (int i = 0; i < 4; i++) { v += a * noise(p); p *= 2.0; a *= 0.5; }
+  return v;
+}
+
+vec3 saiyan() {
+  vec3 c = texture(uSrc, vUv).rgb;
+  float l = luma(c);
+
+  // 1) 진짜 머리카락을 금색으로 (어두운 곳은 진한 금색, 밝은 곳은 연한 금색)
+  // 마스크 가장자리를 부드럽게 (주변 9칸 평균)
+  float hm = 0.0;
+  vec2 hs = 3.0 / uVideoSize;
+  for (int j = -1; j <= 1; j++)
+    for (int i = -1; i <= 1; i++)
+      hm += texture(uHair, vUv + vec2(float(i), float(j)) * hs).r;
+  float hair = smoothstep(0.4, 0.8, hm / 9.0);
+  vec3 gold = mix(vec3(0.78, 0.47, 0.02), vec3(1.0, 0.95, 0.55), smoothstep(0.02, 0.4, l));
+  c = mix(c, gold, hair * 0.95);
+
+  // 2) 청록색 눈동자 (가운데 동공은 어둡게 유지)
+  for (int i = 0; i < 2; i++) {
+    float r = uIris[i].z;
+    if (r <= 0.0) continue;
+    float d = length((vUv - uIris[i].xy) * uVideoSize);
+    float iris = 1.0 - smoothstep(r * 0.8, r * 1.05, d);
+    vec3 teal = vec3(0.05, 0.80, 0.72) * (0.45 + l * 1.4);
+    teal = mix(c * 0.6, teal, smoothstep(r * 0.25, r * 0.45, d));
+    c = mix(c, teal, iris * 0.9);
+  }
+
+  // 3) 뾰족 머리·번개
+  vec4 o = texture(uOverlay, vUv);
+  c = mix(c, o.rgb, o.a);
+
+  // 4) 머리 주변에서 타오르는 황금 오라
+  if (uHead.w > 0.5) {
+    vec2 p = (vUv - uHead.xy) * uVideoSize / uHead.z;
+    vec2 right = vec2(-uUp.y, uUp.x);
+    vec2 q = vec2(dot(p, right), dot(p, uUp));     // q.y > 0 이 머리 위쪽
+    float r = length(q * vec2(1.0, 0.8));
+    float flame = fbm(vec2(q.x * 3.0, q.y * 1.4 - uTime * 3.5));
+    float ring = smoothstep(0.75, 1.05, r) * (1.0 - smoothstep(1.25, 1.7 + flame * 0.9, r));
+    ring *= smoothstep(-1.6, -0.4, q.y);            // 몸 아래쪽으로 갈수록 약하게
+    float tongues = smoothstep(0.42, 0.72, flame);  // 불꽃 혀 모양
+    float a = ring * (0.12 + 0.8 * tongues) * (1.0 + 1.5 * uBurst);
+    a *= 1.0 - o.a * 0.6;                           // 머리카락 위에서는 살짝만
+    c += vec3(1.0, 0.80, 0.22) * a;
+  }
+
+  // 전체적으로 황금빛 + 변신 순간 번쩍
+  c *= vec3(1.04, 1.01, 0.94);
+  c = mix(c, vec3(1.0, 0.97, 0.8), uBurst * 0.75);
+  return clamp(c, 0.0, 1.0);
+}
+
 void main() {
   vec3 c;
   if (uStyle == 0) c = webtoon();
   else if (uStyle == 1) c = sketch();
-  else c = pixel();
+  else if (uStyle == 2) c = pixel();
+  else c = saiyan();
   outColor = vec4(c, 1.0);
 }`;
 
@@ -261,6 +335,8 @@ export class Renderer {
 
     this.videoTex = makeTexture(gl);
     this.aiTex = makeTexture(gl);
+    this.overlayTex = makeTexture(gl);
+    this.hairTex = makeTexture(gl);
     this.flat = null;
     this.styled = null;
     this.width = 0;
@@ -299,7 +375,22 @@ export class Renderer {
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, w, h, 0, gl.RGBA, gl.UNSIGNED_BYTE, rgba);
   }
 
-  // opts: { quad, style, mirror, ai: {rect} | null, border }
+  uploadOverlay(canvas) {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.overlayTex);
+    gl.pixelStorei(gl.UNPACK_FLIP_Y_WEBGL, false);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, canvas);
+  }
+
+  uploadHair(mask) {
+    const gl = this.gl;
+    gl.bindTexture(gl.TEXTURE_2D, this.hairTex);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.R8, mask.width, mask.height, 0, gl.RED, gl.UNSIGNED_BYTE, mask.data);
+    gl.pixelStorei(gl.UNPACK_ALIGNMENT, 4);
+  }
+
+  // opts: { quad, style, mirror, ai: {rect} | null, border, saiyan: {iris, head, up, time, burst} | null }
   render(opts) {
     const gl = this.gl;
     const active = !!opts.quad;
@@ -330,6 +421,22 @@ export class Renderer {
       gl.uniform1i(this.style.u.uFlat, 1);
       gl.uniform2fv(this.style.u.uTexel, texel);
       gl.uniform1i(this.style.u.uStyle, opts.style);
+      if (opts.style === STYLES.saiyan) {
+        const u = this.style.u;
+        const sy = opts.saiyan || {};
+        gl.activeTexture(gl.TEXTURE2);
+        gl.bindTexture(gl.TEXTURE_2D, this.overlayTex);
+        gl.activeTexture(gl.TEXTURE3);
+        gl.bindTexture(gl.TEXTURE_2D, this.hairTex);
+        gl.uniform1i(u.uOverlay, 2);
+        gl.uniform1i(u.uHair, 3);
+        gl.uniform3fv(u.uIris, sy.iris || [0, 0, 0, 0, 0, 0]);
+        gl.uniform4fv(u.uHead, sy.head || [0, 0, 1, 0]);
+        gl.uniform2fv(u.uUp, sy.up || [0, -1]);
+        gl.uniform2f(u.uVideoSize, this.width, this.height);
+        gl.uniform1f(u.uTime, sy.time || 0);
+        gl.uniform1f(u.uBurst, sy.burst || 0);
+      }
       gl.drawArrays(gl.TRIANGLE_STRIP, 0, 4);
     }
 

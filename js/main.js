@@ -1,11 +1,14 @@
 import { HandFrameTracker } from './hands.js';
 import { Renderer, STYLES } from './renderer.js';
 import { AiStylizer } from './ai.js';
+import { FaceTracker } from './face.js';
+import { SaiyanFx } from './saiyan.js';
 
 const $ = (sel) => document.querySelector(sel);
 const video = $('#video');
 const canvas = $('#canvas');
 const overlay = $('#overlay');
+const stage = $('#stage');
 const status = $('#status');
 const hint = $('#hint');
 const toolbar = $('#toolbar');
@@ -23,12 +26,16 @@ const state = {
   fps: 0,
   aiResult: null,
   lastQuadAt: 0,
+  burstAt: -Infinity,  // 초사이어인 변신 시작 시각
 };
 window.__app = state; // 디버그용 (콘솔에서 상태 확인)
 
 const tracker = new HandFrameTracker();
 window.__tracker = tracker;
 const ai = new AiStylizer();
+const face = new FaceTracker();
+window.__face = face;
+const saiyan = new SaiyanFx();
 let renderer;
 let stream;
 
@@ -80,9 +87,25 @@ function loop() {
   const now = performance.now();
 
   renderer.resize(video.videoWidth, video.videoHeight);
+  const hadQuad = !!state.quad;
   state.quad = tracker.update(video, now);
   if (state.quad) state.lastQuadAt = now;
   renderer.uploadVideo(video);
+
+  // 초사이어인: 프레임이 생기는 순간 변신 연출, 프레임 안에서 얼굴·머리카락 추적
+  let saiyanOpts = null;
+  if (state.style === 'saiyan' && face.ready && state.quad) {
+    if (!hadQuad) state.burstAt = now;
+    face.update(video, now);
+    saiyan.draw(face.landmarks, video.videoWidth, video.videoHeight, now / 1000);
+    renderer.uploadOverlay(saiyan.canvas);
+    if (face.hairMask) renderer.uploadHair(face.hairMask);
+    const burst = Math.max(0, 1 - (now - state.burstAt) / 700);
+    saiyanOpts = { ...saiyan.uniforms, time: now / 1000, burst };
+    shake(burst);
+  } else {
+    shake(0);
+  }
 
   const useAi = state.style === 'ai' && ai.ready;
   if (useAi && state.quad && !ai.busy) {
@@ -108,6 +131,7 @@ function loop() {
     mirror: state.mirror,
     border: state.border ? 3 : 0,
     ai: useAi && state.aiResult ? { rect: state.aiResult.rect } : null,
+    saiyan: saiyanOpts,
   });
 
   hint.classList.toggle('show', now - state.lastQuadAt > 4000);
@@ -119,6 +143,16 @@ function loop() {
     frames = 0;
     fpsT0 = now;
   }
+}
+
+// 변신 순간 화면 흔들림
+function shake(amount) {
+  if (amount <= 0) {
+    if (stage.style.transform) stage.style.transform = '';
+    return;
+  }
+  const px = 14 * amount;
+  stage.style.transform = `translate(${(Math.random() - 0.5) * px}px, ${(Math.random() - 0.5) * px}px)`;
 }
 
 // D 키: 손 랜드마크와 FPS 표시
@@ -191,8 +225,25 @@ function syncButtons() {
   $('#btn-border').classList.toggle('on', state.border);
 }
 
+async function selectSaiyan() {
+  if (!face.ready) {
+    setStatus('초사이어인 준비 중… (얼굴 인식 모델 불러오는 중)');
+    try {
+      await face.init();
+      setStatus('');
+    } catch (err) {
+      console.error(err);
+      setStatus('얼굴 인식 모델을 불러오지 못했어요.', true);
+      return;
+    }
+  }
+  state.style = 'saiyan';
+  syncButtons();
+}
+
 function setStyle(style) {
   if (style === 'ai') selectAi();
+  else if (style === 'saiyan') selectSaiyan();
   else { state.style = style; syncButtons(); }
 }
 
@@ -223,7 +274,7 @@ cameraSelect.addEventListener('change', () => startCamera(cameraSelect.value).ca
 window.addEventListener('keydown', (e) => {
   if (e.target instanceof HTMLSelectElement) return;
   const key = e.key.toLowerCase();
-  const map = { 1: 'webtoon', 2: 'sketch', 3: 'pixel', 4: 'ai' };
+  const map = { 1: 'webtoon', 2: 'sketch', 3: 'pixel', 4: 'ai', 5: 'saiyan' };
   if (map[key]) setStyle(map[key]);
   else if (key === 'm') { state.mirror = !state.mirror; syncButtons(); }
   else if (key === 'b') { state.border = !state.border; syncButtons(); }
